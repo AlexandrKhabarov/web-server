@@ -9,17 +9,20 @@ logger = logging.getLogger("HTTP_Server")
 
 class Server:
     SUPPORT_METHODS = ["GET", "POST"]
+    SUPPORT_ACCEPTS = ["text/html", "application/json"]
     HTTP_VERSION = "1.1"
-    SERVER_NAME = "Super_Server"
+    SERVER_NAME = "Server"
     WORK_DIR = os.path.dirname(os.path.abspath(__file__))
     STATIC_DIR = os.path.join(WORK_DIR, "static")
     TEMPLATE_404_path = os.path.join(STATIC_DIR, "html_404.html")
-    HTTP_TEMPLATE_ANSWER = """HTTP/{version} {code} {rubric}
-                                Server: super-server
-                                Date: {date}
-                                Content-Type: {content}
-                                Content-Length: {content_length}\n\n
-                                {body}"""
+    HTTP_TEMPLATE_ANSWER = """
+    HTTP/{version} {code} {rubric}
+    Server: super-server
+    Date: {date}
+    Content-Type: {content}
+    Content-Length: {content_length}\n\n
+    {body}
+    """
 
     def __init__(self, address, port=8888):
         self.address = address
@@ -56,7 +59,7 @@ class Server:
         elif header['method'] == "POST":
             response = self._do_post(header['uri'], body)
         else:
-            response = self._do_default()
+            response = self._do_error(code=405, rubric="Method Not Allowed")
         return response
 
     def _parse_request(self, request: bytes):
@@ -69,35 +72,36 @@ class Server:
     def _do_get(self, uri):
         path = self._validate_uri(uri)
         if path:
-            response = self._construct_response(path, 200)
+            response = self._construct_response(path, code=200, rubric="OK")
             return response
-        return self._do_default()
+        return self._do_error(code=404, rubric="Not Found")
 
     def _do_post(self, uri, body):
         path = self._validate_uri(uri)
         if path:
-            response = self._construct_response(path, 200)
+            response = self._construct_response(path, code=200, rubric="OK")
             return response
-        return self._do_default()
+        return self._do_error(code=404, rubric="Not Found")
 
     def _validate_uri(self, path):
         path = os.path.join(self.STATIC_DIR, path.strip('/'))
         if os.path.exists(path) and os.access(path, os.R_OK):
             return path
 
-    def _do_default(self):
+    def _do_error(self, code=400, rubric="Bad Request"):
         return self._construct_response(
             self.TEMPLATE_404_path,
-            404
+            code,
+            rubric
         )
 
-    def _construct_response(self, path, code):
+    def _construct_response(self, path, code, rubric):
         content = b''
         with open(path, 'rb') as f:
             content += self._construct_http_response(
                 code,
                 self.HTTP_VERSION,
-                "OK",
+                rubric,
                 datetime.date.today(),
                 f.read()
             )
