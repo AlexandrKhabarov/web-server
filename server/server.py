@@ -26,32 +26,6 @@ class Server:
     {body}
     """
 
-    HTML_GOOD = """
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <title>Title</title>
-    </head>
-    <body>
-        <h1 align="center">It's Worked!</h1>
-    </body>
-    </html>
-    """
-
-    HTML_BAD = """
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <title>Title</title>
-    </head>
-    <body>
-        <h1 align="center">{code}-{rubric}</h1>
-    </body>
-    </html>
-    """
-
     def __init__(self, address, port=8888):
         self.address = address
         self.port = port
@@ -83,7 +57,7 @@ class Server:
     def _handle_method(self, request: bytes):
         header, body, = self._parse_request(request)
         if header['method'] == "GET":
-            response = self._do_get(header['uri']) # передавать целый хэдер
+            response = self._do_get(header['uri'])  # передавать целый хэдер
         elif header['method'] == "POST":
             response = self._do_post(header['uri'], body)
         else:
