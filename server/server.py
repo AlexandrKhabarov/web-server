@@ -2,21 +2,20 @@ import socket
 import logging
 import os
 import datetime
-import re
+from server import urls
+from server import db
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("HTTP_Server")
-match_accept = re.compile("Accept:.*")
 
 
 class Server:
-    SUPPORT_METHODS = ["GET", "POST"]
     SUPPORT_ACCEPTS = ["text/html", "application/json"]
     HTTP_VERSION = "HTTP/1.1"
     SERVER_NAME = "Default Server"
     WORK_DIR = os.path.dirname(os.path.abspath(__file__))
     STATIC_DIR = os.path.join(WORK_DIR, "static")
-    TEMPLATE_404_path = os.path.join(STATIC_DIR, "html_404.html")
+    TEMPLATE_404_path = os.path.join(STATIC_DIR, "html-404.html")
 
     HTTP_TEMPLATE_ANSWER = """{version} {code} {rubric}
     Server: super-server
@@ -132,7 +131,7 @@ class Server:
         header['method'], opts, header['version'] = content.split(" ")
         header['uri'], opts = opts.split("?")
         header['args'] = {}
-        for opt in opts.strip("\n\r\t").split("&"):
+        for opt in opts.split("&"):
             key, val = opt.split("=")
             header['args'][key] = val
 
