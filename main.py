@@ -14,5 +14,5 @@ class SetupServer:
 
 
 if __name__ == "__main__":
-    server = Server('127.0.0.1', 8889)
+    server = Server('192.168.0.5', 8888)
     server.start_server()
