@@ -12,13 +12,13 @@ match_accept = re.compile("Accept:.*")
 class Server:
     SUPPORT_METHODS = ["GET", "POST"]
     SUPPORT_ACCEPTS = ["text/html", "application/json"]
-    HTTP_VERSION = "1.1"
+    HTTP_VERSION = "HTTP/1.1"
     SERVER_NAME = "Default Server"
     WORK_DIR = os.path.dirname(os.path.abspath(__file__))
     STATIC_DIR = os.path.join(WORK_DIR, "static")
     TEMPLATE_404_path = os.path.join(STATIC_DIR, "html_404.html")
 
-    HTTP_TEMPLATE_ANSWER = """HTTP/{version} {code} {rubric}
+    HTTP_TEMPLATE_ANSWER = """{version} {code} {rubric}
     Server: super-server
     Date: {date}
     Content-Type: {content}
@@ -55,32 +55,32 @@ class Server:
         client_sock.close()
 
     def _handle_method(self, request: bytes):
-        header, body, = self._parse_request(request)
+        header = self._parse_request(request)
         if header['method'] == "GET":
-            response = self._do_get(header['uri'])  # передавать целый хэдер
+            response = self._do_get(header)
         elif header['method'] == "POST":
-            response = self._do_post(header['uri'], body)
+            response = self._do_post(header)
         else:
             response = self._do_error(code=405, rubric="Method Not Allowed")
         return response
 
     def _parse_request(self, request: bytes):
-        chunk_request = request.decode('utf-8').split('\n')
+        chunk_request = request.decode('utf-8').replace("\r", "").strip().split('\n')
         header = dict()
         self._parse_title_response(header, chunk_request[0])
         self._parse_format_of_response(header, chunk_request[1:])
-        if header['version'].split('/')[1].strip('\r') == self.HTTP_VERSION:
-            return header, chunk_request[1:]
+        if header['version'] == self.HTTP_VERSION:
+            return header
 
-    def _do_get(self, uri):
-        path = self._validate_uri(uri)
+    def _do_get(self, header):
+        path = self._validate_uri(header.get("uri"))
         if path:
             response = self._construct_response(path, code=200, rubric="OK")
             return response
         return self._do_error(code=404, rubric="Not Found")
 
-    def _do_post(self, uri, body):
-        path = self._validate_uri(uri)
+    def _do_post(self, header):
+        path = self._validate_uri(header.get("uri"))
         if path:
             response = self._construct_response(path, code=200, rubric="OK")
             return response
@@ -129,7 +129,7 @@ class Server:
 
     @staticmethod
     def _parse_with_arguments(header, content):
-        header['method'], opts, header['version'] = content.strip("\n\t\r").split(" ")
+        header['method'], opts, header['version'] = content.split(" ")
         header['uri'], opts = opts.split("?")
         header['args'] = {}
         for opt in opts.strip("\n\r\t").split("&"):
@@ -142,8 +142,8 @@ class Server:
 
     def _parse_format_of_response(self, header, content):
         for option in content:
-            if match_accept.match(option):
-                header["accept"] = option.strip("\r\t\n").split(" ")[1]
+            opt, val = option.split(":", maxsplit=1)
+            header[opt.lower()] = list(map(lambda x: x.strip(), val.split(",")))
         accept_value = header.get("accept", None)
         if accept_value is None or accept_value not in self.SUPPORT_ACCEPTS:
             header["accept"] = "text/html"
