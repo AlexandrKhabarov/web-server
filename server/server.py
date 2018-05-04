@@ -11,7 +11,8 @@ logger = logging.getLogger("HTTP_Server")
 
 
 class BaseServer:
-    SUPPORT_ACCEPTS = ["text/html", "application/json"]
+    SUPPORT_ACCEPTS = ["text/html", "application/json", "text/css", "image/png", "image/svg", "image/gif", "image/*",
+                       "*/*"]
     HTTP_VERSION = "HTTP/1.1"
     SERVER_NAME = None
     WORK_DIR = None
@@ -24,9 +25,10 @@ class BaseServer:
     Server: super-server
     Date: {date}
     Content-Type: {content}
-    Content-Length: {content_length}\n\n
-    {body}
+    Content-Length: {content_length}\n
     """
+
+    # {body}
 
     def __init__(self, address="127.0.0.1", port=8888):
         self.address = address
@@ -34,7 +36,7 @@ class BaseServer:
         self.socket = socket.socket(
             socket.AF_INET,
             socket.SOCK_STREAM,
-            proto=0
+            # proto=0
         )
 
     def start_server(self):
@@ -70,12 +72,28 @@ class BaseServer:
         return response
 
     def _parse_request(self, request: bytes):
-        chunk_request = request.decode('utf-8').replace("\r", "").strip().split('\n')
-        header = dict()
+        try:
+            chunk_request, args = request.decode('utf-8').replace("\r", "").strip().split('\n\n')
+            return self._parse_body(chunk_request=chunk_request, args=args)
+        except ValueError:
+            chunk_request = request.decode('utf-8').replace("\r", "").strip().split("\n")
+            return self._parse_body(chunk_request=chunk_request)
+
+    def _parse_body(self, chunk_request, args=None):
+        header = {}
         self._parse_title_request(header, chunk_request[0])
         self._parse_format_of_request(header, chunk_request[1:])
+        if args is not None:
+            self._parse_args(header, args)
         if header['version'] == self.HTTP_VERSION:
             return header
+
+    @staticmethod
+    def _parse_args(header, args):
+        for arg in args.replace("+", " ").strip().split("&"):
+            option, value = arg.split("=")
+            header["args"] = {}
+            header["args"][option] = value
 
     def _parse_title_request(self, header, content):
         if content.find("?") > 0:
@@ -101,7 +119,7 @@ class BaseServer:
             opt, val = option.split(":", maxsplit=1)
             header[opt.lower()] = list(map(lambda x: x.strip(), val.split(",")))
         accept_value = header.get("accept", None)
-        if accept_value is None or accept_value not in self.SUPPORT_ACCEPTS:
+        if not any(list(map(lambda x: x in self.SUPPORT_ACCEPTS, accept_value))):
             header["accept"] = "text/html"
 
     def _do_get(self, header):
@@ -143,6 +161,7 @@ class BlogServer(BaseServer):
                 version=self.HTTP_VERSION,
                 rubric="OK",
                 date=datetime.date.today(),
+                type_content=header['accept'][0] or None,
                 content=content
             )
             return response
@@ -156,12 +175,13 @@ class BlogServer(BaseServer):
                 version=self.HTTP_VERSION,
                 rubric="OK",
                 date=datetime.date.today(),
+                type_content=header['accept'][0] or None,
                 content=content
             )
             return response
         return self._do_error(code=404, rubric="Not Found")
 
-    def _do_error(self, code=400, rubric="Bad Request"):
+    def _do_error(self, code=400, rubric="Bad Request", type_content=None):
 
         with open(self.TEMPLATE_404_path, 'rb') as f:
             return self._construct_http_response(
@@ -169,10 +189,19 @@ class BlogServer(BaseServer):
                 version=self.HTTP_VERSION,
                 rubric=rubric,
                 date=datetime.date.today(),
+                type_content=type_content or None,
                 content=f.read()
             )
 
     def _validate_uri(self, uri):
+        response = self._search_template(uri)
+        if response is not None:
+            return response
+        response = self._search_static(uri, self.STATIC_DIR)
+        if response is not None:
+            return response
+
+    def _search_template(self, uri):
         for path in self.URLS.keys():
             match_uri = re.match(path, uri)
             if match_uri:
@@ -197,13 +226,29 @@ class BlogServer(BaseServer):
                     )
                 return bytes(template, 'utf-8')
 
-    def _construct_http_response(self, code, version, rubric, date, content):
+    def _search_static(self, uri, static):
+        abs_path = os.path.join(self.STATIC_DIR, uri)
+        dir_name = os.path.dirname(abs_path)
+        static_name = os.path.basename(abs_path)
+        for root, dirs, static_files in os.walk(static):
+            if dir_name == root:
+                for static_file in static_files:
+                    if static_name == static_file:
+                        with open(os.path.join(root, static_file), 'rb') as f:
+                            content = f.read()
+                        return content
+            for dir in dirs:
+                static_file = self._search_static(uri, os.path.join(root, dir))
+                if static_file is not None:
+                    return static_file
+
+    def _construct_http_response(self, code, version, rubric, date, type_content, content):
         return self.HTTP_TEMPLATE_ANSWER.format(
             version=version,
             code=code,
             rubric=rubric,
             date=date,
-            content="text/html",
+            content=type_content or "text/html",
             content_length=len(content),
-            body=content.decode('utf-8')
-        ).encode()
+            # body=content.decode('utf-8')
+        ).encode() + content

@@ -6,7 +6,19 @@ class DbBlog:
         self.conn = sqlite3.connect(name)
         self.cur = self.conn.cursor()
 
+    def drop_blog_table(self):
+        self.cur.execute('''
+        drop table if exists blog_table;
+        ''')
+
+    def drop_templates_table(self):
+        self.cur.execute('''
+        drop table if exists templates;
+        ''')
+
     def create_tables(self):
+        self.drop_blog_table()
+        self.drop_templates_table()
         self.cur.execute('''
         create table if not exists blog_table
             (
