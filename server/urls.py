@@ -1,5 +1,5 @@
 urls = {
-    "/": {"template": "index.html", "name": "index"},
-    "/create-post": {"template": "create-post.html", "name": "create_post"},
-    "/{num-post}": {"template": "blog-post.html", "name": "blog_post"}
+    "^$": {"template": "index.html", "name": "index.html"},
+    "^create-post$": {"template": "create-post.html", "name": "create-post.html"},
+    "^[0-9]{1,}$": {"template": "blog-post.html", "name": "blog-post.html"}
 }

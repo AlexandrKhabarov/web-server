@@ -6,24 +6,22 @@ class DbBlog:
         self.conn = sqlite3.connect(name)
         self.cur = self.conn.cursor()
 
-    def create_table(self):
+    def create_tables(self):
         self.cur.execute('''
-        create table blog_table
+        create table if not exists blog_table
             (
-                id integer, 
-                title integer, 
-                content text,
-                primary key id autoincrement
-            )
+                id integer primary key autoincrement,
+                title text not null, 
+                content text not null
+            );
             ''')
         self.cur.execute('''
-        create table templates
+        create table if not exists templates
             (
-                id integer, 
-                name text, 
-                template text,
-                primary key id autoincrement
-            )
+                id integer primary key autoincrement, 
+                name text not null, 
+                template text not null
+            );
             ''')
 
     def get_post(self, num_post):
@@ -36,16 +34,16 @@ class DbBlog:
         return self.cur.execute('''
         select template 
             from templates 
-            where name={name}'''.format(name=name)).fetchall()
+            where name="{name}";'''.format(name=name)).fetchall()
 
     def insert_template(self, name, template):
-        self.cur.execute('''insert into templates 
-                                values({name}, {template}) '''.format(name=name, template=template))
+        self.cur.execute('''insert into templates (name, template)
+                                values('{name}', '{template}');'''.format(name=name, template=template))
         self.conn.commit()
 
     def insert_post(self, title, content):
-        self.cur.execute('''insert into blog_table 
-                                values({title}, {content}) '''.format(title=title, content=content))
+        self.cur.execute('''insert into blog_table (title, content)
+                                values("{title}", "{content}");'''.format(title=title, content=content))
         self.conn.commit()
 
     def close(self):
