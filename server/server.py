@@ -1,3 +1,4 @@
+import json
 import datetime
 import socket
 import logging
@@ -62,7 +63,7 @@ class BaseServer:
         elif header['method'] == "POST":
             response = self._do_post(header)
         else:
-            response = self._do_error(code=405, rubric="Method Not Allowed")
+            response = self._do_error(code=405, rubric="Method Not Allowed", type_content=header.get("accept"))
         return response
 
     def _parse_request(self, request: bytes):
@@ -125,7 +126,7 @@ class BaseServer:
 
         accept_value = header.get("accept", None)
         if not any(list(map(lambda x: x in self.SUPPORT_ACCEPTS, accept_value))):
-            header["accept"] = "text/html"
+            header["accept"] = ["text/html"]
 
     def _do_get(self, header):
         raise NotImplementedError
@@ -133,7 +134,7 @@ class BaseServer:
     def _do_post(self, header):
         raise NotImplementedError
 
-    def _do_error(self, code, rubric):
+    def _do_error(self, code, rubric, type_content):
         raise NotImplementedError
 
 
@@ -170,7 +171,7 @@ class BlogServer(BaseServer):
                 content=content
             )
             return response
-        return self._do_error(code=404, rubric="Not Found")
+        return self._do_error(code=404, rubric="Not Found", type_content=header.get("accept"))
 
     def _do_post(self, header):
         if header.get("uri").strip("/") == "create-post":
@@ -188,8 +189,7 @@ class BlogServer(BaseServer):
                         ), 'utf-8')
                     )
                 except Exception:
-                    pass
-        return self._do_error(code=404, rubric="Not Found")
+                    return self._do_error(code=404, rubric="Not Found", type_content=header.get("accept"))
 
     def _do_error(self, code=400, rubric="Bad Request", type_content=None):
 
@@ -230,6 +230,7 @@ class BlogServer(BaseServer):
                     template = self.DB.get_template(name)
                     template = template.format(
                         create_post="/create-post/",
+                        index="/",
                         content=self.DB.get_post(int(match_uri.group())) or None,
                         previous_post="/{}/".format(str(int(match_uri.group()) - 1)),
                         next_post="/{}/".format(str(int(match_uri.group()) + 1))
@@ -253,6 +254,8 @@ class BlogServer(BaseServer):
                     return static_file
 
     def _construct_http_response(self, code, version, rubric, date, type_content, content):
+        if "application/json" in type_content:
+            content = bytes(json.dumps(content.decode('utf-8')), 'utf-8')
         return self.HTTP_TEMPLATE_ANSWER.format(
             version=version,
             code=code,
