@@ -37,16 +37,22 @@ class DbBlog:
             ''')
 
     def get_post(self, num_post):
-        return self.cur.execute('''
+        result = self.cur.execute('''
         select content 
             from blog_table 
             where id = {id}'''.format(id=num_post)).fetchall()
+        if result:
+            return result[0][0]
+
 
     def get_template(self, name):
-        return self.cur.execute('''
+        result = self.cur.execute('''
         select template 
             from templates 
             where name="{name}";'''.format(name=name)).fetchall()
+        if result:
+            return result[0][0]
+
 
     def insert_template(self, name, template):
         self.cur.execute('''insert into templates (name, template)

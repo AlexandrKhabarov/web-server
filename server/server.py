@@ -21,14 +21,7 @@ class BaseServer:
     TEMPLATE_404_path = None
     URLS = None
     DB = None
-    HTTP_TEMPLATE_ANSWER = """{version} {code} {rubric}
-    Server: super-server
-    Date: {date}
-    Content-Type: {content}
-    Content-Length: {content_length}\n
-    """
-
-    # {body}
+    HTTP_TEMPLATE_ANSWER = """{version} {code} {rubric}\nServer: super-server\nDate: {date}\nContent-Type: {content}\nContent-Disposition: inline\nContent-Length: {content_length}\n\n"""
 
     def __init__(self, address="127.0.0.1", port=8888):
         self.address = address
@@ -36,7 +29,7 @@ class BaseServer:
         self.socket = socket.socket(
             socket.AF_INET,
             socket.SOCK_STREAM,
-            # proto=0
+            proto=0
         )
 
     def start_server(self):
@@ -55,6 +48,7 @@ class BaseServer:
     def _handle_request(self, client_sock):
         data = client_sock.recv(1024)
         response = self._handle_method(data)
+        client_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, True)
         client_sock.sendall(response)
         client_sock.close()
 
@@ -116,8 +110,19 @@ class BaseServer:
 
     def _parse_format_of_request(self, header, content):
         for option in content:
-            opt, val = option.split(":", maxsplit=1)
-            header[opt.lower()] = list(map(lambda x: x.strip(), val.split(",")))
+            try:
+                opt, val = option.split(":", maxsplit=1)
+                header[opt.lower()] = list(map(lambda x: x.strip(), val.split(",")))
+            except Exception:
+                if header.get("method") == "POST":
+                    header["post"] = {}
+                    try:
+                        for note in option.strip("&").split("&"):
+                            opt, val = note.split("=")
+                            header["post"][opt] = val.replace("+", " ")
+                    except Exception:
+                        pass
+
         accept_value = header.get("accept", None)
         if not any(list(map(lambda x: x in self.SUPPORT_ACCEPTS, accept_value))):
             header["accept"] = "text/html"
@@ -168,17 +173,22 @@ class BlogServer(BaseServer):
         return self._do_error(code=404, rubric="Not Found")
 
     def _do_post(self, header):
-        content = self._validate_uri(header.get("uri"))
-        if content:
-            response = self._construct_http_response(
-                code=200,
-                version=self.HTTP_VERSION,
-                rubric="OK",
-                date=datetime.date.today(),
-                type_content=header['accept'][0] or None,
-                content=content
-            )
-            return response
+        if header.get("uri").strip("/") == "create-post":
+            if header.get("post", None) is not None:
+                try:
+                    self.DB.insert_post(header.get("post").get("title"), header.get("post").get("post"))
+                    return self._construct_http_response(
+                        code=200,
+                        version=self.HTTP_VERSION,
+                        rubric="OK",
+                        date=datetime.date.today(),
+                        type_content=header['accept'][0] or None,
+                        content=bytes(self.DB.get_template("create-post.html").format(
+                            index="/"
+                        ), 'utf-8')
+                    )
+                except Exception:
+                    pass
         return self._do_error(code=404, rubric="Not Found")
 
     def _do_error(self, code=400, rubric="Bad Request", type_content=None):
@@ -209,20 +219,20 @@ class BlogServer(BaseServer):
                 template = None
                 if name == "index.html":
                     template = self.DB.get_template(name)
-                    template = template[0][0].format(
+                    template = template.format(
                         create_post="create-post/",
                         read_all_post="1/"
                     )
                 elif name == "create-post.html":
                     template = self.DB.get_template(name)
-                    template = template[0][0].format(index="/")
+                    template = template.format(index="/")
                 elif name == "blog-post.html":
                     template = self.DB.get_template(name)
-                    template = template[0][0].format(
-                        create_post="create_post/",
-                        content=self.DB.get_post(name),
-                        previous_post=self.DB.get_post(name - 1),
-                        next_post=self.DB.get_post(name + 1)
+                    template = template.format(
+                        create_post="/create-post/",
+                        content=self.DB.get_post(int(match_uri.group())) or None,
+                        previous_post="/{}/".format(str(int(match_uri.group()) - 1)),
+                        next_post="/{}/".format(str(int(match_uri.group()) + 1))
                     )
                 return bytes(template, 'utf-8')
 
@@ -250,5 +260,4 @@ class BlogServer(BaseServer):
             date=date,
             content=type_content or "text/html",
             content_length=len(content),
-            # body=content.decode('utf-8')
         ).encode() + content
