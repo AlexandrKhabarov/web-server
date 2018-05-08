@@ -162,17 +162,32 @@ class BlogServer(BaseServer):
 
     def _do_get(self, header):
         """Content must be byte array"""
-        content = self._validate_uri(header.get("uri").strip("/"))
-        if content is not None:
-            response = self._construct_http_response(
-                code=200,
-                version=self.HTTP_VERSION,
-                rubric="OK",
-                date=datetime.date.today(),
-                type_content=header['accept'][0] or None,
-                content=content
-            )
-            return response
+        try:
+            html, content = self._validate_uri(header.get("uri").strip("/"))
+            if html is not None:
+                response = self._construct_http_response(
+                    code=200,
+                    version=self.HTTP_VERSION,
+                    rubric="OK",
+                    date=datetime.date.today(),
+                    type_content=header['accept'][0] or None,
+                    html=html,
+                    content=content,
+                )
+                return response
+        except Exception:
+            html = self._validate_uri(header.get("uri").strip("/"))
+            if html is not None:
+                response = self._construct_http_response(
+                    code=200,
+                    version=self.HTTP_VERSION,
+                    rubric="OK",
+                    date=datetime.date.today(),
+                    type_content=header['accept'][0] or None,
+                    html=html,
+                )
+                return response
+
         return self._do_error(code=404, rubric="Not Found", type_content=header.get("accept"))
 
     def _do_post(self, header):
@@ -181,12 +196,12 @@ class BlogServer(BaseServer):
                 try:
                     self.DB.insert_post(header.get("post").get("title"), header.get("post").get("post"))
                     return self._construct_http_response(
-                        code=200,
+                        code=201,
                         version=self.HTTP_VERSION,
                         rubric="OK",
                         date=datetime.date.today(),
                         type_content=header['accept'][0] or None,
-                        content=bytes(self.DB.get_template("create-post.html").format(
+                        html=bytes(self.DB.get_template("create-post.html").format(
                             index="/"
                         ), 'utf-8')
                     )
@@ -202,7 +217,7 @@ class BlogServer(BaseServer):
                 rubric=rubric,
                 date=datetime.date.today(),
                 type_content=type_content or None,
-                content=f.read()
+                html=f.read()
             )
 
     def _validate_uri(self, uri):
@@ -230,13 +245,15 @@ class BlogServer(BaseServer):
                     template = template.format(index="/")
                 elif name == "blog-post.html":
                     template = self.DB.get_template(name)
+                    content = self.DB.get_post(int(match_uri.group()))
                     template = template.format(
                         create_post="/create-post/",
                         index="/",
-                        content=self.DB.get_post(int(match_uri.group())) or None,
+                        content=content or None,
                         previous_post="/{}/".format(str(int(match_uri.group()) - 1)),
                         next_post="/{}/".format(str(int(match_uri.group()) + 1))
                     )
+                    return bytes(template, 'utf-8'), bytes(str(content), 'utf-8')
                 return bytes(template, 'utf-8')
 
     def _search_static(self, uri, static):
@@ -255,14 +272,17 @@ class BlogServer(BaseServer):
                 if static_file is not None:
                     return static_file
 
-    def _construct_http_response(self, code, version, rubric, date, type_content, content):
+    def _construct_http_response(self, code, version, rubric, date, type_content, html, content=None):
         if "application/json" in type_content:
-            content = bytes(json.dumps(content.decode('utf-8')), 'utf-8')
+            if content is not None:
+                html = bytes(json.dumps({"html": content.decode("utf-8")}), 'utf-8')
+            else:
+                html = bytes(json.dumps({"html": []}), 'utf-8')
         return self.HTTP_TEMPLATE_ANSWER.format(
             version=version,
             code=code,
             rubric=rubric,
             date=date,
             content=type_content or "text/html",
-            content_length=len(content),
-        ).encode() + content
+            content_length=len(html),
+        ).encode() + html
