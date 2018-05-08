@@ -147,10 +147,19 @@ class BlogServer(BaseServer):
     STATIC_DIR = os.path.join(WORK_DIR, "static")
     TEMPLATE_DIR = os.path.join(WORK_DIR, "template")
     TEMPLATE_404_path = os.path.join(TEMPLATE_DIR, "html-404.html")
-    DB = db.DbBlog("blog.db")
+    DATABASE_NAME = "blog.db"
+    DB = db.DbBlog(DATABASE_NAME)
     URLS = urls.urls
 
     def setup_db(self):
+        db_path = os.path.join(self.WORK_DIR, self.DATABASE_NAME)
+        if not os.path.exists(db_path):
+            self._prepare_db()
+        elif not os.path.isfile(db_path):
+            os.rename(self.DATABASE_NAME, self.DATABASE_NAME + ".back")
+            self._prepare_db()
+
+    def _prepare_db(self):
         self.DB.create_tables()
         for root, _, templates in os.walk(self.TEMPLATE_DIR):
             for template in templates:
