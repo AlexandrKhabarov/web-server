@@ -4,6 +4,9 @@ from server.server import BlogServer
 import requests
 from multiprocessing import Process
 import time
+import os
+import sys
+import signal
 
 
 class BlogServerTest(unittest.TestCase):
@@ -12,9 +15,9 @@ class BlogServerTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.server_thread = Process(target=cls.server.start_server)
+        cls.server_process = Process(target=cls.server.start_server)
         cls.cur = sqlite3.connect("blog.db").cursor()
-        cls.server_thread.start()
+        cls.server_process.start()
         time.sleep(5)
 
     def test_main_page(self):
@@ -73,6 +76,12 @@ class BlogServerTest(unittest.TestCase):
             "http://{}:{}/12wdfssdfw234".format(self.address, self.port),
             headers={"Accept": "application/json"})
         self.assertEqual(good_answer, r.status_code)
+
+    @classmethod
+    def tearDownClass(cls):
+        os.remove("./blog.db")
+        os.kill(cls.server_process.pid, signal.SIGTERM)
+        sys.exit()
 
 
 if __name__ == "__main__":

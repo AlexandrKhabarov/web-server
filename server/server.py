@@ -5,6 +5,7 @@ import logging
 import re
 import os
 import sys
+from urllib import parse
 from server import urls
 from server import db
 
@@ -49,7 +50,7 @@ class BaseServer:
             sys.exit(0)
 
     def _handle_request(self, client_sock):
-        data = client_sock.recv(1024)
+        data = client_sock.recv(2048)
         response = self._handle_method(data)
         client_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, True)
         client_sock.sendall(response)
@@ -71,7 +72,7 @@ class BaseServer:
     def _parse_request(self, request: bytes):
         try:
             chunk_request, args = request.decode('utf-8').replace("\r", "").strip().split('\n\n')
-            return self._parse_body(chunk_request=chunk_request, args=args)
+            return self._parse_body(chunk_request=chunk_request.split('\n'), args=args)
         except ValueError:
             chunk_request = request.decode('utf-8').replace("\r", "").strip().split("\n")
             return self._parse_body(chunk_request=chunk_request)
@@ -87,10 +88,10 @@ class BaseServer:
 
     @staticmethod
     def _parse_args(header, args):
+        header["args"] = {}
         for arg in args.replace("+", " ").strip().split("&"):
             option, value = arg.split("=")
-            header["args"] = {}
-            header["args"][option] = value
+            header["args"][option] = parse.unquote(value)
 
     def _parse_title_request(self, header, content):
         if content.find("?") > 0:
@@ -192,9 +193,9 @@ class BlogServer(BaseServer):
 
     def _do_post(self, header):
         if header.get("uri").strip("/") == "create-post":
-            if header.get("post", None) is not None:
+            if header.get("args", None) is not None:
                 try:
-                    self.DB.insert_post(header.get("post").get("title"), header.get("post").get("post"))
+                    self.DB.insert_post(header.get("args").get("title"), header.get("args").get("post"))
                     return self._construct_http_response(
                         code=201,
                         version=self.HTTP_VERSION,
@@ -246,14 +247,17 @@ class BlogServer(BaseServer):
                 elif name == "blog-post.html":
                     template = self.DB.get_template(name)
                     content = self.DB.get_post(int(match_uri.group()))
-                    template = template.format(
-                        create_post="/create-post/",
-                        index="/",
-                        content=content or None,
-                        previous_post="/{}/".format(str(int(match_uri.group()) - 1)),
-                        next_post="/{}/".format(str(int(match_uri.group()) + 1))
-                    )
-                    return bytes(template, 'utf-8'), bytes(str(content), 'utf-8')
+                    if content:
+                        template = template.format(
+                            create_post="/create-post/",
+                            index="/",
+                            content=content or None,
+                            previous_post="/{}/".format(str(int(match_uri.group()) - 1)),
+                            next_post="/{}/".format(str(int(match_uri.group()) + 1))
+                        )
+                        return bytes(template, 'utf-8'), bytes(str(content), 'utf-8')
+                    else:
+                        return None
                 return bytes(template, 'utf-8')
 
     def _search_static(self, uri, static):
