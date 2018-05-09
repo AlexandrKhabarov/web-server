@@ -5,6 +5,7 @@ import logging
 import re
 import os
 import sys
+from urllib import parse
 from server import urls
 from server import db
 
@@ -46,10 +47,11 @@ class BaseServer:
         except KeyboardInterrupt:
             logger.info("Server terminate")
             self.socket.close()
+            self.DB.close()
             sys.exit(0)
 
     def _handle_request(self, client_sock):
-        data = client_sock.recv(1024)
+        data = client_sock.recv(2048)
         response = self._handle_method(data)
         client_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, True)
         client_sock.sendall(response)
@@ -71,7 +73,7 @@ class BaseServer:
     def _parse_request(self, request: bytes):
         try:
             chunk_request, args = request.decode('utf-8').replace("\r", "").strip().split('\n\n')
-            return self._parse_body(chunk_request=chunk_request, args=args)
+            return self._parse_body(chunk_request=chunk_request.split('\n'), args=args)
         except ValueError:
             chunk_request = request.decode('utf-8').replace("\r", "").strip().split("\n")
             return self._parse_body(chunk_request=chunk_request)
@@ -87,10 +89,10 @@ class BaseServer:
 
     @staticmethod
     def _parse_args(header, args):
+        header["args"] = {}
         for arg in args.replace("+", " ").strip().split("&"):
             option, value = arg.split("=")
-            header["args"] = {}
-            header["args"][option] = value
+            header["args"][option] = parse.unquote(value)
 
     def _parse_title_request(self, header, content):
         if content.find("?") > 0:
@@ -146,18 +148,26 @@ class BlogServer(BaseServer):
     STATIC_DIR = os.path.join(WORK_DIR, "static")
     TEMPLATE_DIR = os.path.join(WORK_DIR, "template")
     TEMPLATE_404_path = os.path.join(TEMPLATE_DIR, "html-404.html")
-    DB = db.DbBlog("blog.db")
+    DATABASE_NAME = None
+    DB = None
     URLS = urls.urls
 
-    def setup_db(self):
-        self.DB.create_tables()
-        for root, _, templates in os.walk(self.TEMPLATE_DIR):
-            for template in templates:
-                with open(os.path.join(root, template), 'r') as f:
-                    self.DB.insert_template(template, f.read())
+    def setup_db(self, db_name):
+        self.DATABASE_NAME = os.path.join(self.WORK_DIR, db_name)
+        if not os.path.exists(self.DATABASE_NAME):
+            self.DB = db.DbBlog(self.DATABASE_NAME)
+            self._prepare_db()
+        elif not os.path.isfile(self.DATABASE_NAME):
+            os.rename(self.DATABASE_NAME, self.DATABASE_NAME + ".back")
+            self.DB = db.DbBlog(self.DATABASE_NAME)
+            self._prepare_db()
+        self.DB = db.DbBlog(self.DATABASE_NAME)
 
-    def start_server(self):
-        self.setup_db()
+    def _prepare_db(self):
+        self.DB.create_tables()
+
+    def start_server(self, db_name="blog.db"):
+        self.setup_db(db_name)
         super().start_server()
 
     def _do_get(self, header):
@@ -192,20 +202,21 @@ class BlogServer(BaseServer):
 
     def _do_post(self, header):
         if header.get("uri").strip("/") == "create-post":
-            if header.get("post", None) is not None:
+            if header.get("args", None) is not None:
                 try:
-                    self.DB.insert_post(header.get("post").get("title"), header.get("post").get("post"))
+                    self.DB.insert_post(header.get("args").get("title"), header.get("args").get("post"))
                     return self._construct_http_response(
                         code=201,
                         version=self.HTTP_VERSION,
                         rubric="OK",
                         date=datetime.date.today(),
                         type_content=header['accept'][0] or None,
-                        html=bytes(self.DB.get_template("create-post.html").format(
+                        html=bytes(self._get_template("create-post.html").format(
                             index="/"
-                        ), 'utf-8')
+                        ), "utf-8")
                     )
-                except Exception:
+                except Exception as e:
+                    print(e)
                     return self._do_error(code=404, rubric="Not Found", type_content=header.get("accept"))
 
     def _do_error(self, code=400, rubric="Bad Request", type_content=None):
@@ -235,26 +246,36 @@ class BlogServer(BaseServer):
                 name = self.URLS[path].get("name")
                 template = None
                 if name == "index.html":
-                    template = self.DB.get_template(name)
+                    template = self._get_template(name)
                     template = template.format(
                         create_post="create-post/",
                         read_all_post="1/"
                     )
                 elif name == "create-post.html":
-                    template = self.DB.get_template(name)
+                    template = self._get_template(name)
                     template = template.format(index="/")
                 elif name == "blog-post.html":
-                    template = self.DB.get_template(name)
+                    template = self._get_template(name)
                     content = self.DB.get_post(int(match_uri.group()))
-                    template = template.format(
-                        create_post="/create-post/",
-                        index="/",
-                        content=content or None,
-                        previous_post="/{}/".format(str(int(match_uri.group()) - 1)),
-                        next_post="/{}/".format(str(int(match_uri.group()) + 1))
-                    )
-                    return bytes(template, 'utf-8'), bytes(str(content), 'utf-8')
+                    if content:
+                        template = template.format(
+                            create_post="/create-post/",
+                            index="/",
+                            content=content or None,
+                            previous_post="/{}/".format(str(int(match_uri.group()) - 1)),
+                            next_post="/{}/".format(str(int(match_uri.group()) + 1))
+                        )
+                        return bytes(template, 'utf-8'), bytes(str(content), 'utf-8')
+                    else:
+                        return None
                 return bytes(template, 'utf-8')
+
+    def _get_template(self, name):
+        try:
+            with open(os.path.join(self.TEMPLATE_DIR, name)) as f:
+                return f.read()
+        except Exception:
+            pass
 
     def _search_static(self, uri, static):
         abs_path = os.path.join(self.STATIC_DIR, uri)
@@ -283,6 +304,6 @@ class BlogServer(BaseServer):
             code=code,
             rubric=rubric,
             date=date,
-            content=type_content or "text/html",
+            content=type_content[0] or "text/html",
             content_length=len(html),
         ).encode() + html
