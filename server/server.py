@@ -47,6 +47,7 @@ class BaseServer:
         except KeyboardInterrupt:
             logger.info("Server terminate")
             self.socket.close()
+            self.DB.close()
             sys.exit(0)
 
     def _handle_request(self, client_sock):
@@ -147,27 +148,26 @@ class BlogServer(BaseServer):
     STATIC_DIR = os.path.join(WORK_DIR, "static")
     TEMPLATE_DIR = os.path.join(WORK_DIR, "template")
     TEMPLATE_404_path = os.path.join(TEMPLATE_DIR, "html-404.html")
-    DATABASE_NAME = "blog.db"
-    DB = db.DbBlog(DATABASE_NAME)
+    DATABASE_NAME = None
+    DB = None
     URLS = urls.urls
 
-    def setup_db(self):
-        db_path = os.path.join(self.WORK_DIR, self.DATABASE_NAME)
-        if not os.path.exists(db_path):
+    def setup_db(self, db_name):
+        self.DATABASE_NAME = os.path.join(self.WORK_DIR, db_name)
+        if not os.path.exists(self.DATABASE_NAME):
+            self.DB = db.DbBlog(self.DATABASE_NAME)
             self._prepare_db()
-        elif not os.path.isfile(db_path):
+        elif not os.path.isfile(self.DATABASE_NAME):
             os.rename(self.DATABASE_NAME, self.DATABASE_NAME + ".back")
+            self.DB = db.DbBlog(self.DATABASE_NAME)
             self._prepare_db()
+        self.DB = db.DbBlog(self.DATABASE_NAME)
 
     def _prepare_db(self):
         self.DB.create_tables()
-        for root, _, templates in os.walk(self.TEMPLATE_DIR):
-            for template in templates:
-                with open(os.path.join(root, template), 'r') as f:
-                    self.DB.insert_template(template, f.read())
 
-    def start_server(self):
-        self.setup_db()
+    def start_server(self, db_name="blog.db"):
+        self.setup_db(db_name)
         super().start_server()
 
     def _do_get(self, header):
@@ -211,11 +211,12 @@ class BlogServer(BaseServer):
                         rubric="OK",
                         date=datetime.date.today(),
                         type_content=header['accept'][0] or None,
-                        html=bytes(self.DB.get_template("create-post.html").format(
+                        html=bytes(self._get_template("create-post.html").format(
                             index="/"
-                        ), 'utf-8')
+                        ), "utf-8")
                     )
-                except Exception:
+                except Exception as e:
+                    print(e)
                     return self._do_error(code=404, rubric="Not Found", type_content=header.get("accept"))
 
     def _do_error(self, code=400, rubric="Bad Request", type_content=None):
@@ -245,16 +246,16 @@ class BlogServer(BaseServer):
                 name = self.URLS[path].get("name")
                 template = None
                 if name == "index.html":
-                    template = self.DB.get_template(name)
+                    template = self._get_template(name)
                     template = template.format(
                         create_post="create-post/",
                         read_all_post="1/"
                     )
                 elif name == "create-post.html":
-                    template = self.DB.get_template(name)
+                    template = self._get_template(name)
                     template = template.format(index="/")
                 elif name == "blog-post.html":
-                    template = self.DB.get_template(name)
+                    template = self._get_template(name)
                     content = self.DB.get_post(int(match_uri.group()))
                     if content:
                         template = template.format(
@@ -268,6 +269,13 @@ class BlogServer(BaseServer):
                     else:
                         return None
                 return bytes(template, 'utf-8')
+
+    def _get_template(self, name):
+        try:
+            with open(os.path.join(self.TEMPLATE_DIR, name)) as f:
+                return f.read()
+        except Exception:
+            pass
 
     def _search_static(self, uri, static):
         abs_path = os.path.join(self.STATIC_DIR, uri)
@@ -296,6 +304,6 @@ class BlogServer(BaseServer):
             code=code,
             rubric=rubric,
             date=date,
-            content=type_content or "text/html",
+            content=type_content[0] or "text/html",
             content_length=len(html),
         ).encode() + html

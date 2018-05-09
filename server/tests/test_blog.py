@@ -1,5 +1,4 @@
 import unittest
-import sqlite3
 from server.server import BlogServer
 import requests
 from multiprocessing import Process
@@ -10,13 +9,13 @@ import signal
 
 
 class BlogServerTest(unittest.TestCase):
-    address, port = "127.0.0.1", 8888
+    address, port = "127.0.0.1", 8882
     server = BlogServer(address, port)
+    test_db = os.path.join(server.WORK_DIR, "test_db.db")
 
     @classmethod
     def setUpClass(cls):
-        cls.server_process = Process(target=cls.server.start_server)
-        cls.cur = sqlite3.connect("blog.db").cursor()
+        cls.server_process = Process(target=cls.server.start_server, args={cls.test_db})
         cls.server_process.start()
         time.sleep(5)
 
@@ -37,24 +36,11 @@ class BlogServerTest(unittest.TestCase):
         self.assertEqual(good_answer, r.status_code)
 
     def test_blog_page_without_content(self):
-        good_answer = 200
+        good_answer = 404
         r = requests.get(
-            "http://{}:{}/1".format(self.address, self.port),
+            "http://{}:{}/2".format(self.address, self.port),
             headers={"Accept": "application/json"}
         )
-        self.assertEqual(good_answer, r.status_code)
-
-    def test_create_post(self):
-        title, post = "THIS IS TITLE", "THIS IS POST"
-        good_answer = 201
-        r = requests.post(
-            "http://{}:{}/create-post".format(self.address, self.port),
-            data={"title": title, "post": post})
-        _, title_db, post_db = self.cur.execute('select * from blog_table where title="{title}"'.format(
-            title=title
-        )).fetchall()[0]
-        self.assertEqual(title_db, title)
-        self.assertEqual(post_db, post)
         self.assertEqual(good_answer, r.status_code)
 
     def test_blog_page_with_created_post(self):
@@ -79,8 +65,8 @@ class BlogServerTest(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        os.remove("./blog.db")
-        os.kill(cls.server_process.pid, signal.SIGTERM)
+        os.remove(cls.test_db)
+        os.kill(cls.server_process.pid, signal.SIGINT)
         sys.exit()
 
 
