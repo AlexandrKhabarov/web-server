@@ -42,8 +42,13 @@ class BaseServer:
         try:
             while True:
                 client_sock, adr = self.socket.accept()
-                logger.info("server accept connection from {} {}".format(client_sock, adr))
-                self._handle_request(client_sock)
+                logger.info("server accept connection from {}".format(adr))
+                try:
+                    self._handle_request(client_sock)
+                except Exception:
+                    logger.error("connection was aborted {}".format(adr))
+                finally:
+                    client_sock.close()
         except KeyboardInterrupt:
             logger.info("Server terminate")
             self.socket.close()
@@ -55,30 +60,29 @@ class BaseServer:
         response = self._handle_method(data)
         client_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, True)
         client_sock.sendall(response)
-        client_sock.close()
 
     def _handle_method(self, request: bytes):
-        """ Header is dict. This dict has keys. Keys is options of request body.
-            Methods _do_get, _do_post, _do_error must return bytes.
-        """
-        header = self._parse_request(request)
-        if header['method'] == "GET":
-            response = self._do_get(header)
-        elif header['method'] == "POST":
-            response = self._do_post(header)
+        request_options = self._parse_request(request) # todo: переименоваит или разбить (header - not title)
+        if request_options['method'] == "GET":
+            response = self._do_get(request_options)
+        elif request_options['method'] == "POST":
+            response = self._do_post(request_options)
         else:
-            response = self._do_error(code=405, rubric="Method Not Allowed", type_content=header.get("accept"))
+            response = self._do_error(code=405, rubric="Method Not Allowed", type_content=request_options.get("accept"))
         return response
 
     def _parse_request(self, request: bytes):
-        try:
-            chunk_request, args = request.decode('utf-8').replace("\r", "").strip().split('\n\n')
-            return self._parse_body(chunk_request=chunk_request.split('\n'), args=args)
+        request = request.decode('utf-8').replace("\r", "").strip()
+        try: # todo (ничего не понятно сделать читабельнее) # args - не body
+            request_headers, request_body = request.split('\n\n')
+            return self._parse_body(
+                chunk_request=request_headers.split('\n'),
+                args=request_body
+            )
         except ValueError:
-            chunk_request = request.decode('utf-8').replace("\r", "").strip().split("\n")
-            return self._parse_body(chunk_request=chunk_request)
+            return self._parse_body(chunk_request=request.split("\n"))
 
-    def _parse_body(self, chunk_request, args=None):
+    def _parse_body(self, chunk_request, args=None): #todo (переменные для читабельности)
         header = {}
         self._parse_title_request(header, chunk_request[0])
         self._parse_format_of_request(header, chunk_request[1:])
@@ -88,7 +92,7 @@ class BaseServer:
             return header
 
     @staticmethod
-    def _parse_args(header, args):
+    def _parse_args(header, args): # todo имена
         header["args"] = {}
         for arg in args.replace("+", " ").strip().split("&"):
             option, value = arg.split("=")
@@ -101,7 +105,7 @@ class BaseServer:
             self._parse_without_arguments(header, content)
 
     @staticmethod
-    def _parse_with_arguments(header, content):
+    def _parse_with_arguments(header, content): # todo парсинг без аргументов включает в себя парсинг с аргументами
         header['method'], opts, header['version'] = content.split(" ")
         header['uri'], opts = opts.split("?")
         header['args'] = {}
@@ -110,16 +114,16 @@ class BaseServer:
             header['args'][key] = val
 
     @staticmethod
-    def _parse_without_arguments(header, content):
+    def _parse_without_arguments(header, content): # todo переименовать и вызвать в верхнем можно
         header['method'], header['uri'], header['version'] = content.split(" ")
 
     def _parse_format_of_request(self, header, content):
         for option in content:
             try:
                 opt, val = option.split(":", maxsplit=1)
-                header[opt.lower()] = list(map(lambda x: x.strip(), val.split(",")))
+                header[opt.lower()] = list(map(lambda x: x.strip(), val.split(","))) # todo либо переменная либо метод (не читается)
             except Exception:
-                if header.get("method") == "POST":
+                if header.get("method") == "POST": # todo пересмотреть ексептион
                     header["post"] = {}
                     try:
                         for note in option.strip("&").split("&"):
@@ -128,11 +132,11 @@ class BaseServer:
                     except Exception:
                         pass
 
-        accept_value = header.get("accept", None)
-        if not any(list(map(lambda x: x in self.SUPPORT_ACCEPTS, accept_value))):
+        accept_value = header.get("accept", None) # todo отдельный метод назначение дефолтного формата в отдельный меод
+        if not any(list(map(lambda x: x in self.SUPPORT_ACCEPTS, accept_value))): # todo если ассепт не поддерживается то ругается
             header["accept"] = ["text/html"]
 
-    def _do_get(self, header):
+    def _do_get(self, header): # TODO без реализованных методов сервер не нужен ( использовать abc )
         raise NotImplementedError
 
     def _do_post(self, header):
@@ -152,12 +156,12 @@ class BlogServer(BaseServer):
     DB = None
     URLS = urls.urls
 
-    def setup_db(self, db_name):
+    def setup_db(self, db_name): # todo пересмотреть
         self.DATABASE_NAME = os.path.join(self.WORK_DIR, db_name)
         if not os.path.exists(self.DATABASE_NAME):
             self.DB = db.DbBlog(self.DATABASE_NAME)
             self._prepare_db()
-        elif not os.path.isfile(self.DATABASE_NAME):
+        elif not os.path.isfile(self.DATABASE_NAME): # todo проверка не полная и без неё можно обойтись (ругаться должен sqlite)
             os.rename(self.DATABASE_NAME, self.DATABASE_NAME + ".back")
             self.DB = db.DbBlog(self.DATABASE_NAME)
             self._prepare_db()
@@ -270,14 +274,14 @@ class BlogServer(BaseServer):
                         return None
                 return bytes(template, 'utf-8')
 
-    def _get_template(self, name):
+    def _get_template(self, name): # todo проверить путь на диске не кидать исключение в предыдущем методе завалиься на байтах
         try:
             with open(os.path.join(self.TEMPLATE_DIR, name)) as f:
                 return f.read()
-        except Exception:
-            pass
+        except Exception: # todo pep20 ошибки не должны замалчиваться, если html не существует кидаем ошибку на верх
+            pass # todo выкинуть трай эксепт
 
-    def _search_static(self, uri, static):
+    def _search_static(self, uri, static): # todo просто чекнуть есть или нет статика в папке os.path.exists().
         abs_path = os.path.join(self.STATIC_DIR, uri)
         dir_name = os.path.dirname(abs_path)
         static_name = os.path.basename(abs_path)
@@ -298,12 +302,12 @@ class BlogServer(BaseServer):
             if content is not None:
                 html = bytes(json.dumps({"html": content.decode("utf-8")}), 'utf-8')
             else:
-                html = bytes(json.dumps({"html": []}), 'utf-8')
+                html = bytes(json.dumps({"html": []}), 'utf-8') # todo [] - валидная структура в json не обязателен ключ (results можно переименовать)
         return self.HTTP_TEMPLATE_ANSWER.format(
             version=version,
             code=code,
             rubric=rubric,
             date=date,
-            content=type_content[0] or "text/html",
+            content=type_content[0] or "text/html", # todo уже обрабатывал
             content_length=len(html),
         ).encode() + html
