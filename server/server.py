@@ -5,6 +5,7 @@ import logging
 import re
 import os
 import sys
+import abc
 from urllib import parse
 from server import urls
 from server import db
@@ -13,9 +14,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("HTTP_Server")
 
 
-class BaseServer:
-    SUPPORT_ACCEPTS = ["text/html", "application/json", "text/css", "image/png", "image/svg", "image/gif", "image/*",
-                       "*/*"]
+class BaseServer(metaclass=abc.ABCMeta):
+    SUPPORT_ACCEPTS = [
+        "text/html", "application/json", "text/css", "image/png", "image/svg", "image/gif", "image/*", "*/*"
+    ]
     HTTP_VERSION = "HTTP/1.1"
     SERVER_NAME = None
     WORK_DIR = None
@@ -42,8 +44,13 @@ class BaseServer:
         try:
             while True:
                 client_sock, adr = self.socket.accept()
-                logger.info("server accept connection from {} {}".format(client_sock, adr))
-                self._handle_request(client_sock)
+                logger.info("server accept connection from {}".format(adr))
+                try:
+                    self._handle_request(client_sock)
+                except Exception:
+                    logger.error("connection was aborted {}".format(adr))
+                finally:
+                    client_sock.close()
         except KeyboardInterrupt:
             logger.info("Server terminate")
             self.socket.close()
@@ -55,89 +62,94 @@ class BaseServer:
         response = self._handle_method(data)
         client_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, True)
         client_sock.sendall(response)
-        client_sock.close()
 
     def _handle_method(self, request: bytes):
-        """ Header is dict. This dict has keys. Keys is options of request body.
-            Methods _do_get, _do_post, _do_error must return bytes.
-        """
-        header = self._parse_request(request)
-        if header['method'] == "GET":
-            response = self._do_get(header)
-        elif header['method'] == "POST":
-            response = self._do_post(header)
+        start_row, headers, body = self._parse_request(request)
+        if start_row['method'] == "GET":
+            response = self._do_get(start_row, headers, body)
+        elif start_row['method'] == "POST":
+            response = self._do_post(start_row, headers, body)
         else:
-            response = self._do_error(code=405, rubric="Method Not Allowed", type_content=header.get("accept"))
+            response = self._do_error(code=405, rubric="Method Not Allowed", type_content=headers.get("accept"))
         return response
 
     def _parse_request(self, request: bytes):
+        request = request.decode('utf-8').replace("\r", "").strip()
         try:
-            chunk_request, args = request.decode('utf-8').replace("\r", "").strip().split('\n\n')
-            return self._parse_body(chunk_request=chunk_request.split('\n'), args=args)
+            request_headers, request_body = request.split('\n\n')
+            return self._recognize_parameters(
+                request_head=request_headers.split('\n'),
+                request_body=request_body
+            )
         except ValueError:
-            chunk_request = request.decode('utf-8').replace("\r", "").strip().split("\n")
-            return self._parse_body(chunk_request=chunk_request)
+            return self._recognize_parameters(request_head=request.split("\n"))
 
-    def _parse_body(self, chunk_request, args=None):
-        header = {}
-        self._parse_title_request(header, chunk_request[0])
-        self._parse_format_of_request(header, chunk_request[1:])
-        if args is not None:
-            self._parse_args(header, args)
-        if header['version'] == self.HTTP_VERSION:
-            return header
+    def _recognize_parameters(self, request_head, request_body=None):
+        body = {}
+        start_row = self._parse_start_row_request(request_head[0])
+        headers = self._parse_headers_request(request_head[1:])
+        if request_body is not None:
+            body = self._parse_body_request(request_body)
+
+        headers["accept"] = self._check_accept_format(headers.get("accept"))
+
+        if start_row['version'] == self.HTTP_VERSION:
+            return start_row, headers, body if body else None
 
     @staticmethod
-    def _parse_args(header, args):
-        header["args"] = {}
-        for arg in args.replace("+", " ").strip().split("&"):
+    def _parse_body_request(request_body):
+        body = {}
+        for arg in request_body.replace("+", " ").strip().split("&"):
             option, value = arg.split("=")
-            header["args"][option] = parse.unquote(value)
+            body[option] = parse.unquote(value)
+        return body
 
-    def _parse_title_request(self, header, content):
-        if content.find("?") > 0:
-            self._parse_with_arguments(header, content)
+    def _parse_start_row_request(self, request_start_row):
+        start_row = {}
+        start_row['method'], uri, start_row['version'] = request_start_row.split(" ")
+        if uri.find("?") > 0:
+            start_row["args"] = {}
+            start_row["uri"], start_row["args"] = self._parse_with_arguments(uri)
         else:
-            self._parse_without_arguments(header, content)
+            start_row["uri"] = uri
+
+        return start_row
 
     @staticmethod
-    def _parse_with_arguments(header, content):
-        header['method'], opts, header['version'] = content.split(" ")
-        header['uri'], opts = opts.split("?")
-        header['args'] = {}
-        for opt in opts.split("&"):
-            key, val = opt.split("=")
-            header['args'][key] = val
+    def _parse_with_arguments(uri):
+        uri, params = uri.split("?")
+        args = {}
+        for param in params.split("&"):
+            key, val = param.split("=")
+            args[key] = val
+        return uri, args
 
     @staticmethod
-    def _parse_without_arguments(header, content):
-        header['method'], header['uri'], header['version'] = content.split(" ")
-
-    def _parse_format_of_request(self, header, content):
-        for option in content:
+    def _parse_headers_request(request_headers):
+        headers = {}
+        for option in request_headers:
             try:
                 opt, val = option.split(":", maxsplit=1)
-                header[opt.lower()] = list(map(lambda x: x.strip(), val.split(",")))
+                val = list(map(lambda x: x.strip(), val.split(",")))
+                headers[opt.lower()] = val
             except Exception:
-                if header.get("method") == "POST":
-                    header["post"] = {}
-                    try:
-                        for note in option.strip("&").split("&"):
-                            opt, val = note.split("=")
-                            header["post"][opt] = val.replace("+", " ")
-                    except Exception:
-                        pass
+                logger.warning("request have wrong header {}".format(option))
+        return headers
 
-        accept_value = header.get("accept", None)
+    def _check_accept_format(self, accept_value):
         if not any(list(map(lambda x: x in self.SUPPORT_ACCEPTS, accept_value))):
-            header["accept"] = ["text/html"]
+            return ["text/html"]
+        return accept_value
 
-    def _do_get(self, header):
+    @abc.abstractmethod
+    def _do_get(self, start_row, headers, body):
         raise NotImplementedError
 
-    def _do_post(self, header):
+    @abc.abstractmethod
+    def _do_post(self, start_row, headers, body):
         raise NotImplementedError
 
+    @abc.abstractmethod
     def _do_error(self, code, rubric, type_content):
         raise NotImplementedError
 
@@ -157,10 +169,6 @@ class BlogServer(BaseServer):
         if not os.path.exists(self.DATABASE_NAME):
             self.DB = db.DbBlog(self.DATABASE_NAME)
             self._prepare_db()
-        elif not os.path.isfile(self.DATABASE_NAME):
-            os.rename(self.DATABASE_NAME, self.DATABASE_NAME + ".back")
-            self.DB = db.DbBlog(self.DATABASE_NAME)
-            self._prepare_db()
         self.DB = db.DbBlog(self.DATABASE_NAME)
 
     def _prepare_db(self):
@@ -170,23 +178,22 @@ class BlogServer(BaseServer):
         self.setup_db(db_name)
         super().start_server()
 
-    def _do_get(self, header):
-        """Content must be byte array"""
+    def _do_get(self, start_row, header, body):
         try:
-            html, content = self._validate_uri(header.get("uri").strip("/"))
+            html, content = self._validate_uri(start_row.get("uri").strip("/"))
             if html is not None:
                 response = self._construct_http_response(
                     code=200,
-                    version=self.HTTP_VERSION,
+                    version=start_row["version"],
                     rubric="OK",
                     date=datetime.date.today(),
-                    type_content=header['accept'][0] or None,
+                    type_content=header['accept'][0],
                     html=html,
                     content=content,
                 )
                 return response
         except Exception:
-            html = self._validate_uri(header.get("uri").strip("/"))
+            html = self._validate_uri(start_row.get("uri").strip("/"))
             if html is not None:
                 response = self._construct_http_response(
                     code=200,
@@ -200,23 +207,22 @@ class BlogServer(BaseServer):
 
         return self._do_error(code=404, rubric="Not Found", type_content=header.get("accept"))
 
-    def _do_post(self, header):
-        if header.get("uri").strip("/") == "create-post":
-            if header.get("args", None) is not None:
+    def _do_post(self, start_row, header, body):
+        if start_row.get("uri").strip("/") == "create-post":
+            template = self._get_template("create-post.html")
+            template = bytes(template.format(index="/"), "utf-8")
+            if body is not None:
                 try:
-                    self.DB.insert_post(header.get("args").get("title"), header.get("args").get("post"))
+                    self.DB.insert_post(body.get("title"), body.get("post"))
                     return self._construct_http_response(
                         code=201,
-                        version=self.HTTP_VERSION,
+                        version=start_row["version"],
                         rubric="OK",
                         date=datetime.date.today(),
-                        type_content=header['accept'][0] or None,
-                        html=bytes(self._get_template("create-post.html").format(
-                            index="/"
-                        ), "utf-8")
+                        type_content=header['accept'][0],
+                        html=template
                     )
-                except Exception as e:
-                    print(e)
+                except Exception:
                     return self._do_error(code=404, rubric="Not Found", type_content=header.get("accept"))
 
     def _do_error(self, code=400, rubric="Bad Request", type_content=None):
@@ -235,7 +241,7 @@ class BlogServer(BaseServer):
         response = self._search_template(uri)
         if response is not None:
             return response
-        response = self._search_static(uri, self.STATIC_DIR)
+        response = self._search_static(uri)
         if response is not None:
             return response
 
@@ -247,63 +253,65 @@ class BlogServer(BaseServer):
                 template = None
                 if name == "index.html":
                     template = self._get_template(name)
-                    template = template.format(
-                        create_post="create-post/",
-                        read_all_post="1/"
-                    )
+                    try:
+                        template = template.format(
+                            create_post="create-post/",
+                            read_all_post="1/"
+                        )
+                    except AttributeError:
+                        logger.warning("template with name: {} does not exist".format(name))
                 elif name == "create-post.html":
                     template = self._get_template(name)
-                    template = template.format(index="/")
+                    try:
+                        template = template.format(index="/")
+                    except AttributeError:
+                        logger.warning("Template with name: {} does not exist".format(name))
                 elif name == "blog-post.html":
-                    template = self._get_template(name)
+                    template = None
                     content = self.DB.get_post(int(match_uri.group()))
                     if content:
-                        template = template.format(
-                            create_post="/create-post/",
-                            index="/",
-                            content=content or None,
-                            previous_post="/{}/".format(str(int(match_uri.group()) - 1)),
-                            next_post="/{}/".format(str(int(match_uri.group()) + 1))
-                        )
-                        return bytes(template, 'utf-8'), bytes(str(content), 'utf-8')
-                    else:
-                        return None
-                return bytes(template, 'utf-8')
+                        template = self._get_template(name)
+                        try:
+                            template = template.format(
+                                create_post="/create-post/",
+                                index="/",
+                                content=content or None,
+                                previous_post="/{}/".format(str(int(match_uri.group()) - 1)),
+                                next_post="/{}/".format(str(int(match_uri.group()) + 1))
+                            )
+                            return bytes(template, 'utf-8'), bytes(str(content), 'utf-8')
+                        except AttributeError:
+                            logger.warning("template with name {} does not exist".format(name))
+                if template:
+                    return bytes(template, 'utf-8')
 
     def _get_template(self, name):
-        try:
+        abs_path = os.path.join(self.TEMPLATE_DIR, name)
+        if os.path.exists(abs_path):
             with open(os.path.join(self.TEMPLATE_DIR, name)) as f:
                 return f.read()
-        except Exception:
-            pass
 
-    def _search_static(self, uri, static):
+    def _search_static(self, uri):
         abs_path = os.path.join(self.STATIC_DIR, uri)
-        dir_name = os.path.dirname(abs_path)
-        static_name = os.path.basename(abs_path)
-        for root, dirs, static_files in os.walk(static):
-            if dir_name == root:
-                for static_file in static_files:
-                    if static_name == static_file:
-                        with open(os.path.join(root, static_file), 'rb') as f:
-                            content = f.read()
-                        return content
-            for dir in dirs:
-                static_file = self._search_static(uri, os.path.join(root, dir))
-                if static_file is not None:
-                    return static_file
+        if os.path.exists(abs_path):
+            with open(abs_path, 'rb') as f:
+                return f.read()
+        logger.warning("static file with uri - {} does not exist".format(uri))
 
     def _construct_http_response(self, code, version, rubric, date, type_content, html, content=None):
         if "application/json" in type_content:
+            type_content = "application/json"
             if content is not None:
-                html = bytes(json.dumps({"html": content.decode("utf-8")}), 'utf-8')
+                html = bytes(json.dumps({"result": content.decode("utf-8")}, ensure_ascii=False), 'utf-8')
             else:
-                html = bytes(json.dumps({"html": []}), 'utf-8')
+                html = bytes(json.dumps({"result": []}), 'utf-8')
+        else:
+            type_content = type_content[0]
         return self.HTTP_TEMPLATE_ANSWER.format(
             version=version,
             code=code,
             rubric=rubric,
             date=date,
-            content=type_content[0] or "text/html",
+            content=type_content,
             content_length=len(html),
         ).encode() + html

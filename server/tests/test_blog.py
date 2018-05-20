@@ -4,7 +4,6 @@ import requests
 from multiprocessing import Process
 import time
 import os
-import sys
 import signal
 
 
@@ -38,7 +37,7 @@ class BlogServerTest(unittest.TestCase):
     def test_blog_page_without_content(self):
         good_answer = 404
         r = requests.get(
-            "http://{}:{}/2".format(self.address, self.port),
+            "http://{}:{}/20".format(self.address, self.port),
             headers={"Accept": "application/json"}
         )
         self.assertEqual(good_answer, r.status_code)
@@ -53,7 +52,7 @@ class BlogServerTest(unittest.TestCase):
             "http://{}:{}/1".format(self.address, self.port),
             headers={"Accept": "application/json"}
         )
-        self.assertEqual(post, r.json()['html'])
+        self.assertEqual(post, r.json()['result'])
         self.assertEqual(good_answer, r.status_code)
 
     def test_bad_page(self):
@@ -67,7 +66,7 @@ class BlogServerTest(unittest.TestCase):
     def tearDownClass(cls):
         os.remove(cls.test_db)
         os.kill(cls.server_process.pid, signal.SIGINT)
-        sys.exit()
+        # sys.exit()  sys.exit завалит всё если много тестов
 
 
 if __name__ == "__main__":
