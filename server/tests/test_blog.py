@@ -66,7 +66,7 @@ class BlogServerTest(unittest.TestCase):
     def tearDownClass(cls):
         os.remove(cls.test_db)
         os.kill(cls.server_process.pid, signal.SIGINT)
-        # sys.exit() # todo sys.exit завалит всё если много тестов
+        # sys.exit()  sys.exit завалит всё если много тестов
 
 
 if __name__ == "__main__":
