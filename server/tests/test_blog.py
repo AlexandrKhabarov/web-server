@@ -8,7 +8,7 @@ import signal
 
 
 class BlogServerTest(unittest.TestCase):
-    address, port = "127.0.0.1", 8882
+    address, port = "127.0.0.1", 8884
     server = BlogServer(address, port)
     test_db = os.path.join(server.WORK_DIR, "test_db.db")
 
@@ -22,7 +22,7 @@ class BlogServerTest(unittest.TestCase):
         good_answer = 200
         r = requests.get(
             "http://{}:{}/".format(self.address, self.port),
-            headers={"Accept": "application/json"}
+            headers={"Accept": "text/html"}
         )
         self.assertEqual(good_answer, r.status_code)
 
@@ -30,7 +30,7 @@ class BlogServerTest(unittest.TestCase):
         good_answer = 200
         r = requests.get(
             "http://{}:{}/create-post".format(self.address, self.port),
-            headers={"Accept": "application/json"}
+            headers={"Accept": "text/html"}
         )
         self.assertEqual(good_answer, r.status_code)
 

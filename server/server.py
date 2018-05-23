@@ -47,8 +47,8 @@ class BaseServer(metaclass=abc.ABCMeta):
                 logger.info("server accept connection from {}".format(adr))
                 try:
                     self._handle_request(client_sock)
-                except Exception:
-                    logger.error("connection was aborted {}".format(adr))
+                except Exception as e:
+                    logger.exception("connection was aborted {}".format(e))
                 finally:
                     client_sock.close()
         except KeyboardInterrupt:
@@ -70,8 +70,12 @@ class BaseServer(metaclass=abc.ABCMeta):
         elif start_row['method'] == "POST":
             response = self._do_post(start_row, headers, body)
         else:
-            response = self._do_error(code=405, rubric="Method Not Allowed", type_content=headers.get("accept"))
-        return response
+            return self._do_error(code=405, rubric="Method Not Allowed", type_content=headers.get("accept"))
+
+        if response:
+            return response
+        else:
+            return self._do_error(code=404, rubric="Not Found", type_content=headers.get("accept"))
 
     def _parse_request(self, request: bytes):
         request = request.decode('utf-8').replace("\r", "").strip()
@@ -95,6 +99,7 @@ class BaseServer(metaclass=abc.ABCMeta):
 
         if start_row['version'] == self.HTTP_VERSION:
             return start_row, headers, body if body else None
+        raise NotImplementedError("version {} not implemented".format(start_row['version']))
 
     @staticmethod
     def _parse_body_request(request_body):
@@ -129,9 +134,9 @@ class BaseServer(metaclass=abc.ABCMeta):
         headers = {}
         for option in request_headers:
             try:
-                opt, val = option.split(":", maxsplit=1)
-                val = list(map(lambda x: x.strip(), val.split(",")))
-                headers[opt.lower()] = val
+                header, values = option.split(":", maxsplit=1)
+                values = list(map(lambda x: x.strip(), values.split(",")))
+                headers[header.lower()] = values
             except Exception:
                 logger.warning("request have wrong header {}".format(option))
         return headers
@@ -179,33 +184,40 @@ class BlogServer(BaseServer):
         super().start_server()
 
     def _do_get(self, start_row, header, body):
+        if "application/json" in header.get("accept"):
+            return self._do_json(start_row, header)
+        else:
+            return self._do_html(start_row, header)
+
+    def _do_json(self, start_row, header):
         try:
-            html, content = self._validate_uri(start_row.get("uri").strip("/"))
-            if html is not None:
-                response = self._construct_http_response(
+            content = self.DB.get_post(start_row.get("uri").strip("/"))
+            if content:
+                return self._construct_http_response(
                     code=200,
                     version=start_row["version"],
                     rubric="OK",
                     date=datetime.date.today(),
-                    type_content=header['accept'][0],
-                    html=html,
-                    content=content,
+                    type_content="application/json",
+                    content=bytes(json.dumps({"result": content}), 'utf-8')
                 )
-                return response
         except Exception:
-            html = self._validate_uri(start_row.get("uri").strip("/"))
+            return self._do_error(code=404, rubric="Not Found", type_content=header.get("accept"))
+
+    def _do_html(self, start_row, header):
+        try:
+            html = self._get_content_by_uri(start_row.get("uri").strip("/"))  # todo validate uri (rename)
             if html is not None:
-                response = self._construct_http_response(
+                return self._construct_http_response(
                     code=200,
                     version=self.HTTP_VERSION,
                     rubric="OK",
                     date=datetime.date.today(),
-                    type_content=header['accept'][0] or None,
-                    html=html,
+                    type_content=header['accept'][0],
+                    content=html,
                 )
-                return response
-
-        return self._do_error(code=404, rubric="Not Found", type_content=header.get("accept"))
+        except Exception:
+            return self._do_error(code=404, rubric="Not Found", type_content=header.get("accept"))
 
     def _do_post(self, start_row, header, body):
         if start_row.get("uri").strip("/") == "create-post":
@@ -220,7 +232,7 @@ class BlogServer(BaseServer):
                         rubric="OK",
                         date=datetime.date.today(),
                         type_content=header['accept'][0],
-                        html=template
+                        content=template
                     )
                 except Exception:
                     return self._do_error(code=404, rubric="Not Found", type_content=header.get("accept"))
@@ -234,10 +246,10 @@ class BlogServer(BaseServer):
                 rubric=rubric,
                 date=datetime.date.today(),
                 type_content=type_content or None,
-                html=f.read()
+                content=f.read()
             )
 
-    def _validate_uri(self, uri):
+    def _get_content_by_uri(self, uri):
         response = self._search_template(uri)
         if response is not None:
             return response
@@ -275,11 +287,11 @@ class BlogServer(BaseServer):
                             template = template.format(
                                 create_post="/create-post/",
                                 index="/",
-                                content=content or None,
+                                content=content,
                                 previous_post="/{}/".format(str(int(match_uri.group()) - 1)),
                                 next_post="/{}/".format(str(int(match_uri.group()) + 1))
                             )
-                            return bytes(template, 'utf-8'), bytes(str(content), 'utf-8')
+                            return bytes(template, 'utf-8')
                         except AttributeError:
                             logger.warning("template with name {} does not exist".format(name))
                 if template:
@@ -298,20 +310,12 @@ class BlogServer(BaseServer):
                 return f.read()
         logger.warning("static file with uri - {} does not exist".format(uri))
 
-    def _construct_http_response(self, code, version, rubric, date, type_content, html, content=None):
-        if "application/json" in type_content:
-            type_content = "application/json"
-            if content is not None:
-                html = bytes(json.dumps({"result": content.decode("utf-8")}, ensure_ascii=False), 'utf-8')
-            else:
-                html = bytes(json.dumps({"result": []}), 'utf-8')
-        else:
-            type_content = type_content[0]
+    def _construct_http_response(self, code, version, rubric, date, type_content, content):
         return self.HTTP_TEMPLATE_ANSWER.format(
             version=version,
             code=code,
             rubric=rubric,
             date=date,
             content=type_content,
-            content_length=len(html),
-        ).encode() + html
+            content_length=len(content),
+        ).encode() + content
